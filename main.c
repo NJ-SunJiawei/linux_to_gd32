@@ -280,10 +280,9 @@ static int check_signal(int signum)
 static void terminate(void)
 {	
     running = 0;
+	ogs_pollset_notify(pollset);
 	ogs_queue_term(queue);
-
-	ogs_thread_destroy(thread);
-
+	
 	ogs_pollset_remove(uart_rx_poll);
 	ogs_pollset_remove(udp_rx_poll);
 	close(usb_fd);
@@ -294,10 +293,14 @@ static void terminate(void)
 	ogs_socknode_free(dst_node);
 
 	ogs_queue_destroy(queue);
+
+	ogs_thread_destroy(thread);
+
     ogs_pkbuf_default_destroy();
 	ogs_pool_final(&pool_uart);
     ogs_pool_final(&pool_udp);
 	ogs_core_terminate();
+
 }
 
 static void uart_initial(void)
