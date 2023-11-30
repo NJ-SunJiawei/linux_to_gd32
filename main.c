@@ -16,13 +16,13 @@ typedef struct udp_address_s{
 }udp_address_t;
 
 char SERIAL_PORT[128] = "/dev/ttyUSB0";
+//char SERIAL_PORT[128] = "/dev/ttyUSB1";
 
-udp_address_t udp_address = {"192.168.204.128", 10086}; 
-udp_address_t dst_udp_address = {"192.168.204.102", 10087}; 
+//udp_address_t dst_udp_address = {"192.168.1.138", 7777}; 
+udp_address_t dst_udp_address = {"10.21.50.210", 7777}; 
 
 ogs_socket_t  usb_fd = -1;
-ogs_sock_t *sock = NULL;
-ogs_socknode_t *node = NULL;
+ogs_sock_t *dst_sock = NULL;
 ogs_socknode_t *dst_node = NULL;
 
 static ogs_thread_t *thread = NULL;
@@ -159,51 +159,64 @@ static void udp_recv_handler(short when, ogs_socket_t fd, void *data)
     } 
 }
 
-static int udp_sendto(void *data, size_t len)
+static int udp_sendto(unsigned char *data, size_t len)
 {
     ssize_t sent;
 
     ogs_assert(data);
 
-    sent = ogs_sendto(sock->fd, data, len, 0, dst_node->addr);
+    sent = ogs_sendto(dst_sock->fd, (void*)data, len, 0, dst_node->addr);
     if (sent < 0 || sent != len) {
 		ogs_error("ogs_sendto() failed [%s]", strerror(errno));
         return OGS_ERROR;
     }
 
-	ogs_debug("UDP SEND: ==>");
+	ogs_debug("UDP SEND(len = %ld): ==>", sent);
 	ogs_log_hexdump(OGS_LOG_DEBUG, data, len);
 
     return OGS_OK;
 }
 
-static int uart_sendto(void *data, size_t len)
+static int uart_sendto(unsigned char *data, size_t len)
 {
     ssize_t sent;
+	int i = 0;
 
     ogs_assert(data);
 
-    sent = write(usb_fd, data, len);
-    if (sent < 0 || sent != len) {
-		ogs_error("uart_sendto() failed [%s]", strerror(errno));
-        return OGS_ERROR;
-    }
+	/*for(i = 0; i < len; i++){
+		sent = write(usb_fd, (void*)&data[i], 1);
+		if (sent <= 0) {
+			ogs_error("uart_sendto() failed [%s]", strerror(errno));
+			return OGS_ERROR;
+		}
+		ogs_debug("UART send[%d]: 0x%02x", i, data[i]);
+		ogs_usleep(10);
+	}
+	ogs_debug("UART SEND(len = %d): ==>", i);*/
 
-	ogs_debug("UART SEND: ==>");
+	sent = write(usb_fd, data, len);
+	if (sent < 0 || sent != len) {
+		ogs_error("uart_sendto() failed [%s]", strerror(errno));
+		return OGS_ERROR;
+	}
+
+	ogs_debug("UART SEND(len = %ld): ==>", sent);
 	ogs_log_hexdump(OGS_LOG_DEBUG, data, len);
 
     return OGS_OK;
 }
 
+unsigned char response[18] = {0x4d,0x3c,0x2b,0x1a,0x11,0x00,0x10,0x00,0x00,0x00,0x00,0x00,0x8f,0x7e,0x3c,0x2b, '\r', '\n'};
 
 static void main_process(event_t *e)
 {
     ogs_info("main_process enter");
-
+	
 	switch(e->id){
 		case MSG_UART:{
 			udp_sendto(e->pkbuf->data, e->pkbuf->len);
-			//uart_sendto(e->pkbuf->data, e->pkbuf->len);
+			//uart_sendto(response, 18);
 			ogs_pkbuf_free(e->pkbuf);
 			uart_event_free(e);
 			break;
@@ -226,7 +239,6 @@ static void main_thread(void *data)
     int rv = OGS_ERROR;
 
     ogs_info("main_thread running...");
-
     while(running) {
         ogs_pollset_poll(pollset, -1);
         for ( ;; ) {
@@ -288,8 +300,7 @@ static void terminate(void)
 	close(usb_fd);
 	ogs_pollset_destroy(pollset);
 
-	ogs_sock_destroy(sock);
-	ogs_socknode_free(node);
+	ogs_sock_destroy(dst_sock);
 	ogs_socknode_free(dst_node);
 
 	ogs_queue_destroy(queue);
@@ -335,20 +346,15 @@ static void uart_initial(void)
 static void udp_initial(void)
 {
     int ret = OGS_ERROR;
-    ogs_sockaddr_t *addr = NULL, *dst_addr = NULL;
-
-    ret = ogs_addaddrinfo(&addr, AF_UNSPEC, udp_address.ip, udp_address.port, 0);
-    ogs_assert(ret == OGS_OK);
-    node = ogs_socknode_new(addr);
-    ogs_assert(node);
-	sock = ogs_udp_server(node);
-	ogs_assert(sock);
-	udp_rx_poll = ogs_pollset_add(pollset, OGS_POLLIN, sock->fd, udp_recv_handler, NULL);
+    ogs_sockaddr_t *dst_addr = NULL;
 
     ret = ogs_addaddrinfo(&dst_addr, AF_UNSPEC, dst_udp_address.ip, dst_udp_address.port, 0);
     ogs_assert(ret == OGS_OK);
     dst_node = ogs_socknode_new(dst_addr);
     ogs_assert(dst_node);
+	dst_sock = ogs_udp_client(dst_node);
+	ogs_assert(dst_sock);
+	udp_rx_poll = ogs_pollset_add(pollset, OGS_POLLIN, dst_sock->fd, udp_recv_handler, NULL);
 }
 
 
